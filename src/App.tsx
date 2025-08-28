@@ -73,20 +73,23 @@ export default function App() {
     }
   };
 
-  // BLE connect and subscribe
+  // BLE connect and subscribe (Chafon H103 logic)
   const connectBLE = async () => {
-    if (!navigator.bluetooth) {
+    // Chafon H103 UUIDs (from index.html)
+    const SERVICE_UUID     = "0000ffe0-0000-1000-8000-00805f9b34fb";
+    const WRITE_CHAR_UUID  = "0000ffe3-0000-1000-8000-00805f9b34fb";
+    const NOTIFY_CHAR_UUID = "0000ffe4-0000-1000-8000-00805f9b34fb";
+
+    if (!(navigator as any).bluetooth) {
       alert("Web Bluetooth not supported in this browser.");
       return;
     }
     try {
       setDeviceName("");
-      const optionalServices = [] as BluetoothServiceUUID[];
-      if (svcUUID) optionalServices.push(svcUUID as BluetoothServiceUUID);
-
-      const device = await navigator.bluetooth.requestDevice({
+      const device = await (navigator as any).bluetooth.requestDevice({
+        //filters: [{ services: [SERVICE_UUID] }]
         acceptAllDevices: true,
-        optionalServices,
+          optionalServices: [SERVICE_UUID]
       });
       bleDeviceRef.current = device;
       setDeviceName(device.name || "Unnamed device");
@@ -95,30 +98,33 @@ export default function App() {
         setConnected(false);
       });
 
-      const server = await device.gatt!.connect();
-      const service = await server.getPrimaryService(svcUUID as BluetoothServiceUUID);
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService(SERVICE_UUID);
+      const writeChar = await service.getCharacteristic(WRITE_CHAR_UUID);
+      bleCharTxRef.current = writeChar;
+      const notifyChar = await service.getCharacteristic(NOTIFY_CHAR_UUID);
+      bleCharRxRef.current = notifyChar;
+      await notifyChar.startNotifications();
 
-      // RX: notifications from reader (tags)
-      const rx = await service.getCharacteristic(rxUUID as BluetoothCharacteristicUUID);
-      bleCharRxRef.current = rx;
-      await rx.startNotifications();
-      rx.addEventListener("characteristicvaluechanged", (ev: Event) => {
-        const value = (ev.target as BluetoothRemoteGATTCharacteristic).value;
+      notifyChar.addEventListener("characteristicvaluechanged", (event: any) => {
+        const value = event.target.value;
         if (!value) return;
-        const text = td.decode(value.buffer);
-        // Split on separator (default \n)
-        text.split(sep).forEach((line) => line && handleLine(line));
+        const data = new Uint8Array(value.buffer);
+        // Find EPC start (0xE2)
+        const idx = data.indexOf(0xE2);
+        if (idx !== -1) {
+          const epcBytes = data.slice(idx, idx + 12); // 96-bit EPC
+          const epc = Array.from(epcBytes)
+            .map(b => b.toString(16).padStart(2, "0"))
+            .join("")
+            .toUpperCase();
+          addTag(epc);
+        }
       });
 
-      // TX: write commands to reader (optional)
-      try {
-        const tx = await service.getCharacteristic(txUUID as BluetoothCharacteristicUUID);
-        bleCharTxRef.current = tx;
-      } catch (e) {
-        bleCharTxRef.current = null; // Not all firmwares expose a write characteristic
-      }
-
       setConnected(true);
+      alert("Connected. Scan tags to see EPCs (unique only).\nIf you see nothing, ensure your H103 is in BLE mode and using the correct UUIDs.");
+      // Optionally: send start inventory command here using writeChar.writeValue()
     } catch (err: any) {
       console.error(err);
       alert(`BLE connect failed: ${err?.message || err}`);

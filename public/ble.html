@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Chafon H103 RFID Reader</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    button { padding: 10px 20px; font-size: 16px; }
+    ul { margin-top: 20px; }
+    li { padding: 5px; font-size: 18px; }
+  </style>
+</head>
+<body>
+  <h2>Chafon H103 RFID Reader</h2>
+  <button id="connect">Connect & Start Reading</button>
+  
+  <h3>Detected EPCs:</h3>
+  <ul id="epcList"></ul>
+
+  <script>
+    const SERVICE_UUID     = "0000ffe0-0000-1000-8000-00805f9b34fb";
+    const WRITE_CHAR_UUID  = "0000ffe3-0000-1000-8000-00805f9b34fb";
+    const NOTIFY_CHAR_UUID = "0000ffe4-0000-1000-8000-00805f9b34fb";
+
+    const seenEPCs = new Set();
+    const epcList = document.getElementById("epcList");
+
+    function addEPC(epc) {
+      if (!seenEPCs.has(epc)) {
+        seenEPCs.add(epc);
+        const li = document.createElement("li");
+        li.textContent = epc;
+        epcList.appendChild(li);
+      }
+    }
+
+    async function connectDevice() {
+      try {
+        const device = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          //filters: [{ services: [SERVICE_UUID] }]
+          optionalServices: [SERVICE_UUID]
+        });
+
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        const writeChar = await service.getCharacteristic(WRITE_CHAR_UUID);
+        const notifyChar = await service.getCharacteristic(NOTIFY_CHAR_UUID);
+
+        await notifyChar.startNotifications();
+
+        notifyChar.addEventListener("characteristicvaluechanged", (event) => {
+        const data = new Uint8Array(event.target.value.buffer);
+
+        // Find EPC start (0xE2)
+        const idx = data.indexOf(0xE2);
+        if (idx !== -1) {
+            const epcBytes = data.slice(idx, idx + 12); // take only first 12 bytes (96-bit EPC)
+            const epc = Array.from(epcBytes)
+            .map(b => b.toString(16).padStart(2, "0"))
+            .join("")
+            .toUpperCase();
+
+            addEPC(epc);
+        }
+        });
+
+        alert("Connected. Scan tags to see EPCs (unique only).");
+
+        // Optional: send "start inventory" command here using writeChar.writeValue()
+      } catch (err) {
+        alert("Error: " + err);
+      }
+    }
+
+    document.getElementById("connect").addEventListener("click", connectDevice);
+  </script>
+</body>
+</html>
